@@ -1,0 +1,3 @@
+[submodule "ehls/babble"]
+	path = ehls/babble
+	url = https://github.com/dcao/babble.git
