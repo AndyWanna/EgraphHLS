@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "egglog-hls"
+version = "0.1.0"
+description = "DialEgg track of EgraphHLS: a verified MLIR <-> e-graph <-> MLIR round-trip"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["egglog>=13"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+egglog-hls = "egglog_hls.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/egglog_hls"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

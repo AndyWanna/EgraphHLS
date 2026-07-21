@@ -1,0 +1,81 @@
+"""Command-line entry point.
+
+    python -m egglog_hls roundtrip path.mlir [--emit out.mlir] [-q]
+    python -m egglog_hls reg2mem   path.mlir [--emit out.mlir]
+
+``roundtrip`` runs MLIR -> e-graph -> MLIR and verifies the result is unchanged
+(exit code 0 on success, 1 on a verification failure). ``reg2mem`` prints the
+normalized form.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+from .normalize import reg2mem
+from .parser import parse_module
+from .printer import print_module
+from .ir import canonicalize
+from .roundtrip import roundtrip_text
+
+
+def _cmd_roundtrip(args: argparse.Namespace) -> int:
+    text = _read(args.path)
+    result = roundtrip_text(text)
+    if args.emit:
+        _write(args.emit, result.output_text)
+    elif not args.quiet:
+        sys.stdout.write(result.output_text)
+
+    status = "OK" if result.ok else "FAIL"
+    sys.stderr.write(
+        f"[{status}] {args.path}: identity={result.identity_ok} "
+        f"fixpoint={result.fixpoint_ok}\n"
+    )
+    if not result.ok:
+        sys.stderr.write(result.diff + "\n")
+    return 0 if result.ok else 1
+
+
+def _cmd_reg2mem(args: argparse.Namespace) -> int:
+    module = reg2mem(parse_module(_read(args.path)))
+    out = print_module(canonicalize(module))
+    if args.emit:
+        _write(args.emit, out)
+    else:
+        sys.stdout.write(out)
+    return 0
+
+
+def _read(path: str) -> str:
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _write(path: str, text: str) -> None:
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="egglog_hls", description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    rt = sub.add_parser("roundtrip", help="MLIR -> e-graph -> MLIR, verified")
+    rt.add_argument("path")
+    rt.add_argument("--emit", help="write output MLIR to this file")
+    rt.add_argument("-q", "--quiet", action="store_true", help="suppress MLIR on stdout")
+    rt.set_defaults(func=_cmd_roundtrip)
+
+    rm = sub.add_parser("reg2mem", help="normalize scf.for iter_args to store form")
+    rm.add_argument("path")
+    rm.add_argument("--emit", help="write output MLIR to this file")
+    rm.set_defaults(func=_cmd_reg2mem)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
