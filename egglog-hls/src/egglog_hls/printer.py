@@ -86,13 +86,15 @@ def _print_func(func: Func, depth: int, lines: list[str]) -> None:
     pad = _INDENT * depth
     args = ", ".join(f"{_v(n)}: {t}" for n, t in zip(func.arg_names, func.arg_types))
     ret = f" -> ({', '.join(func.result_types)})" if func.result_types else ""
-    lines.append(f"{pad}func.func @{func.name}({args}){ret} {{")
+    attrs = f" {func.attributes_raw}" if func.attributes_raw else ""
+    lines.append(f"{pad}func.func @{func.name}({args}){ret}{attrs} {{")
     _print_region(func.body, depth, lines)
     lines.append(pad + "}")
 
 
 def print_module(module: Module) -> str:
-    lines = ["module {"]
+    head = f"module {module.attributes_raw} {{" if module.attributes_raw else "module {"
+    lines = [head]
     for func in module.funcs:
         _print_func(func, 1, lines)
     lines.append("}")

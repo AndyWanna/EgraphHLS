@@ -46,11 +46,16 @@ class Func:
     arg_types: list[str] = field(default_factory=list)
     result_types: list[str] = field(default_factory=list)
     body: Region = field(default_factory=Region)
+    # Trailing "attributes {...}" (e.g. llvm.linkage from a real frontend),
+    # preserved verbatim. Holds no SSA values, so it survives canonicalization.
+    attributes_raw: str = ""
 
 
 @dataclass
 class Module:
     funcs: list[Func] = field(default_factory=list)
+    # Text between "module" and its "{" (e.g. cgeist's dlti/llvm attributes).
+    attributes_raw: str = ""
 
 
 # --------------------------------------------------------------------------

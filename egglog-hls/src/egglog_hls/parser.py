@@ -21,7 +21,12 @@ class ParseError(Exception):
 
 
 _RESULTS_RE = re.compile(r"^\s*(%[\w$.-]+(?:\s*,\s*%[\w$.-]+)*)\s*=\s*(.*)$")
-_FUNC_RE = re.compile(r"^func\.func\s+@([\w$.-]+)\s*\((.*?)\)\s*(?:->\s*\(?([^{]*?)\)?\s*)?\{$")
+_MODULE_RE = re.compile(r"^module\b\s*(.*?)\s*\{$")
+# name, args, and everything between the args ')' and the opening '{'
+# (an optional "-> (...)" and/or "attributes {...}").
+_FUNC_RE = re.compile(r"^func\.func\s+@([\w$.-]+)\s*\((.*)\)\s*(.*?)\s*\{$")
+_FUNC_ATTRS_RE = re.compile(r"attributes\s*\{.*\}")
+_FUNC_RET_RE = re.compile(r"->\s*\((.*)\)$|->\s*(.+)$")
 _ARG_RE = re.compile(r"%([\w$.-]+)\s*:\s*(.+)")
 _FOR_RE = re.compile(
     r"^scf\.for\s+%([\w$.-]+)\s*=\s*%([\w$.-]+)\s+to\s+%([\w$.-]+)\s+step\s+%([\w$.-]+)"
@@ -89,7 +94,9 @@ class _Parser:
 
     def parse_module(self) -> Module:
         module = Module()
-        if self._peek() == "module {":
+        mm = _MODULE_RE.match(self._peek())
+        if mm:
+            module.attributes_raw = mm.group(1)
             self._next()
             while self._peek() != "}":
                 module.funcs.append(self._parse_func())
@@ -104,7 +111,7 @@ class _Parser:
         m = _FUNC_RE.match(header)
         if not m:
             raise ParseError(f"unrecognized func header: {header!r}")
-        name, args_s, rets_s = m.group(1), m.group(2), m.group(3)
+        name, args_s, trailing = m.group(1), m.group(2), m.group(3).strip()
         arg_names, arg_types = [], []
         for a in _split_top(args_s):
             am = _ARG_RE.match(a.strip())
@@ -112,9 +119,25 @@ class _Parser:
                 raise ParseError(f"bad func argument: {a!r}")
             arg_names.append(am.group(1))
             arg_types.append(am.group(2).strip())
-        result_types = _split_top(rets_s) if rets_s and rets_s.strip() else []
-        body = self._parse_region([])
-        return Func(name, arg_names, arg_types, result_types, body)
+        result_types, attrs_raw = self._split_func_trailing(trailing)
+        func = Func(name, arg_names, arg_types, result_types, self._parse_region([]))
+        func.attributes_raw = attrs_raw
+        return func
+
+    @staticmethod
+    def _split_func_trailing(trailing: str) -> tuple[list[str], str]:
+        """Pull an optional "attributes {...}" and "-> (...)" off the func
+        header, in either order, preserving the attributes text verbatim."""
+        attrs_raw = ""
+        am = _FUNC_ATTRS_RE.search(trailing)
+        if am:
+            attrs_raw = am.group(0)
+            trailing = (trailing[: am.start()] + trailing[am.end() :]).strip()
+        result_types: list[str] = []
+        rm = _FUNC_RET_RE.match(trailing)
+        if rm:
+            result_types = _split_top(rm.group(1) or rm.group(2))
+        return result_types, attrs_raw
 
     def _parse_region(self, block_args: list[tuple[str, str]]) -> Region:
         """Parse ops up to the matching ``}``. The opening ``{`` has already

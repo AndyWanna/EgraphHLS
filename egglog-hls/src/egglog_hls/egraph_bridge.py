@@ -66,11 +66,12 @@ def mk_func(
     arg_types: Vec[String],
     result_types: Vec[String],
     body: RegionTerm,
+    attrs_raw: String,
 ) -> FuncTerm: ...
 
 
 @function
-def mk_module(funcs: Vec[FuncTerm]) -> ModuleTerm: ...
+def mk_module(funcs: Vec[FuncTerm], attrs_raw: String) -> ModuleTerm: ...
 
 
 # --- Vec helpers ---------------------------------------------------------
@@ -112,11 +113,15 @@ def _encode_func(func: Func) -> FuncTerm:
         _svec(func.arg_types),
         _svec(func.result_types),
         _encode_region(func.body),
+        String(func.attributes_raw),
     )
 
 
 def _encode_module(module: Module) -> ModuleTerm:
-    return mk_module(_vec(FuncTerm, [_encode_func(f) for f in module.funcs]))
+    return mk_module(
+        _vec(FuncTerm, [_encode_func(f) for f in module.funcs]),
+        String(module.attributes_raw),
+    )
 
 
 def to_egraph(module: Module) -> tuple[EGraph, ModuleTerm]:
@@ -166,18 +171,19 @@ def _decode_region(node) -> Region:
 
 
 def _decode_func(node) -> Func:
-    _, (name, arg_names, arg_types, result_types, body) = node
+    _, (name, arg_names, arg_types, result_types, body, attrs_raw) = node
     return Func(
         name=name,
         arg_names=list(arg_names),
         arg_types=list(arg_types),
         result_types=list(result_types),
         body=_decode_region(body),
+        attributes_raw=attrs_raw,
     )
 
 
 def from_egraph(egraph: EGraph, term: ModuleTerm) -> Module:
     extracted = egraph.extract(term)
     node = _walk(extracted.__egg_typed_expr__)
-    _, (funcs,) = node
-    return Module(funcs=[_decode_func(f) for f in funcs])
+    _, (funcs, attrs_raw) = node
+    return Module(funcs=[_decode_func(f) for f in funcs], attributes_raw=attrs_raw)
