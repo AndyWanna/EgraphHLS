@@ -32,11 +32,17 @@ _FOR_RE = re.compile(
     r"^scf\.for\s+%([\w$.-]+)\s*=\s*%([\w$.-]+)\s+to\s+%([\w$.-]+)\s+step\s+%([\w$.-]+)"
     r"(?:\s+iter_args\((.*?)\))?\s*(?:->\s*\(([^)]*)\))?\s*\{$"
 )
+_IF_RE = re.compile(r"^scf\.if\s+%([\w$.-]+)\s*(?:->\s*\(([^)]*)\))?\s*\{$")
 _LOAD_RE = re.compile(r"^memref\.load\s+%([\w$.-]+)\[(.*?)\]\s*:\s*(.+)$")
 _STORE_RE = re.compile(r"^memref\.store\s+%([\w$.-]+)\s*,\s*%([\w$.-]+)\[(.*?)\]\s*:\s*(.+)$")
 _ALLOC_RE = re.compile(r"^memref\.alloc[a]?\(\s*\)\s*:\s*(.+)$")
 _CONST_RE = re.compile(r"^arith\.constant\s+(.+?)\s*:\s*(.+)$")
 _BINARY_RE = re.compile(r"^(arith\.\w+)\s+%([\w$.-]+)\s*,\s*%([\w$.-]+)\s*:\s*(.+)$")
+# Unary casts: arith.index_cast / sitofp / trunci / extf / bitcast ...
+# form "op %x : <src> to <dst>"
+_CAST_RE = re.compile(r"^(arith\.\w+)\s+%([\w$.-]+)\s*:\s*(.+?)\s+to\s+(.+)$")
+# Unary same-type ops, e.g. "arith.negf %x : f64".
+_UNARY_RE = re.compile(r"^(arith\.\w+)\s+%([\w$.-]+)\s*:\s*(.+)$")
 _CMP_RE = re.compile(r"^(arith\.cmp[if])\s+(\w+)\s*,\s*%([\w$.-]+)\s*,\s*%([\w$.-]+)\s*:\s*(.+)$")
 _YIELD_RE = re.compile(r"^scf\.yield(?:\s+(.*?)\s*:\s*(.+))?$")
 _RETURN_RE = re.compile(r"^(?:func\.)?return(?:\s+(.*?)\s*:\s*(.+))?$")
@@ -59,6 +65,14 @@ def _split_top(text: str, sep: str = ",") -> list[str]:
     if cur.strip():
         out.append(cur.strip())
     return out
+
+
+def _need(regex: re.Pattern, text: str, kind: str) -> re.Match:
+    """Match or raise a clean ParseError (never an AttributeError downstream)."""
+    m = regex.match(text)
+    if m is None:
+        raise ParseError(f"unrecognized {kind}: {text!r}")
+    return m
 
 
 def _names(csv: str) -> list[str]:
@@ -165,33 +179,47 @@ class _Parser:
     def _dispatch(self, rhs: str, results: list[str]) -> Op:
         if rhs.startswith("scf.for"):
             return self._parse_for(rhs, results)
+        if rhs.startswith("scf.if"):
+            return self._parse_if(rhs, results)
         if rhs.startswith("arith.constant"):
             cm = _CONST_RE.match(rhs)
-            return Op("arith.constant", results, [cm.group(2).strip()], [],
-                      {"value": cm.group(1).strip()})
+            if cm:
+                return Op("arith.constant", results, [cm.group(2).strip()], [],
+                          {"value": cm.group(1).strip()})
+            bm = re.match(r"arith\.constant\s+(true|false)$", rhs)  # bool: no ": type"
+            if bm:
+                return Op("arith.constant", results, ["i1"], [], {"value": bm.group(1)})
+            raise ParseError(f"unrecognized arith.constant: {rhs!r}")
         if rhs.startswith(("arith.cmpi", "arith.cmpf")):
-            cm = _CMP_RE.match(rhs)
+            cm = _need(_CMP_RE, rhs, "arith.cmp")
             return Op(cm.group(1), results, ["i1"], [cm.group(3), cm.group(4)],
                       {"predicate": cm.group(2)})
         if rhs.startswith("arith."):
+            cm = _CAST_RE.match(rhs)
+            if cm:  # unary cast: op %x : src to dst
+                return Op(cm.group(1), results, [cm.group(4).strip()],
+                          [cm.group(2)], meta={"src_type": cm.group(3).strip()})
             bm = _BINARY_RE.match(rhs)
-            if not bm:
-                raise ParseError(f"unrecognized arith op: {rhs!r}")
-            return Op(bm.group(1), results, [bm.group(4).strip()],
-                      [bm.group(2), bm.group(3)])
+            if bm:
+                return Op(bm.group(1), results, [bm.group(4).strip()],
+                          [bm.group(2), bm.group(3)])
+            um = _UNARY_RE.match(rhs)  # e.g. arith.negf %x : f64
+            if um:
+                return Op(um.group(1), results, [um.group(3).strip()], [um.group(2)])
+            raise ParseError(f"unrecognized arith op: {rhs!r}")
         if rhs.startswith("memref.load"):
-            lm = _LOAD_RE.match(rhs)
+            lm = _need(_LOAD_RE, rhs, "memref.load")
             mty = lm.group(3).strip()
             operands = [lm.group(1), *_names(lm.group(2))]
             return Op("memref.load", results, [_elem_type(mty)], operands,
                       meta={"memref_type": mty})
         if rhs.startswith("memref.store"):
-            sm = _STORE_RE.match(rhs)
+            sm = _need(_STORE_RE, rhs, "memref.store")
             mty = sm.group(4).strip()
             operands = [sm.group(1), sm.group(2), *_names(sm.group(3))]
             return Op("memref.store", [], [], operands, meta={"memref_type": mty})
         if rhs.startswith(("memref.alloc", "memref.alloca")):
-            am = _ALLOC_RE.match(rhs)
+            am = _need(_ALLOC_RE, rhs, "memref.alloc")
             return Op("memref.alloc", results, [am.group(1).strip()], [])
         if rhs.startswith("scf.yield"):
             ym = _YIELD_RE.match(rhs)
@@ -204,6 +232,30 @@ class _Parser:
             types = _split_top(rm.group(2)) if rm.group(2) else []
             return Op("func.return", [], [], operands, meta={"types": types})
         raise ParseError(f"unsupported operation: {rhs!r}")
+
+    def _parse_block(self) -> tuple[Region, str]:
+        """Read ops until a line that is ``}`` or ``} else {``, consume it,
+        and return the region plus which terminator closed it."""
+        region = Region()
+        while True:
+            line = self._peek()
+            if line in ("}", "} else {"):
+                self._next()
+                return region, line
+            region.ops.append(self._parse_op())
+
+    def _parse_if(self, rhs: str, results: list[str]) -> Op:
+        m = _IF_RE.match(rhs)
+        if not m:
+            raise ParseError(f"unrecognized scf.if: {rhs!r}")
+        cond, ret_s = m.group(1), m.group(2)
+        result_types = _split_top(ret_s) if ret_s else []
+        then_region, term = self._parse_block()
+        regions = [then_region]
+        if term == "} else {":
+            else_region, _ = self._parse_block()
+            regions.append(else_region)
+        return Op("scf.if", results, result_types, [cond], regions=regions)
 
     def _parse_for(self, rhs: str, results: list[str]) -> Op:
         fm = _FOR_RE.match(rhs)

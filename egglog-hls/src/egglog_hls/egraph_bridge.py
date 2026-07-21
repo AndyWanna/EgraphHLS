@@ -134,6 +134,16 @@ def to_egraph(module: Module) -> tuple[EGraph, ModuleTerm]:
 
 
 # --- decode: extracted term -> IR ---------------------------------------
+def _callable_name(callable_) -> str:
+    """Constructor/function name of a decl callable, across egglog versions.
+    v13: FunctionRef/InitRef carry ``.ident.name``; v11: FunctionRef has
+    ``.name`` and InitRef has ``.class_name``."""
+    ident = getattr(callable_, "ident", None)
+    if ident is not None:
+        return ident.name
+    return getattr(callable_, "name", None) or getattr(callable_, "class_name")
+
+
 def _walk(typed_expr):
     """Turn an extracted egglog TypedExprDecl into plain Python: string leaves
     stay strings, ``Vec`` becomes a list, every other constructor becomes a
@@ -141,7 +151,7 @@ def _walk(typed_expr):
     expr = typed_expr.expr
     if hasattr(expr, "value") and not hasattr(expr, "callable"):  # LitDecl
         return expr.value
-    name = expr.callable.ident.name
+    name = _callable_name(expr.callable)
     children = [_walk(a) for a in expr.args]
     if name == "Vec":
         return children

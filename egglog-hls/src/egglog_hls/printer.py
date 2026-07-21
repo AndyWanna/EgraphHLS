@@ -28,6 +28,16 @@ def _print_op(op: Op, depth: int, lines: list[str]) -> None:
         lines.append(pad + "}")
         return
 
+    if op.name == "scf.if":
+        rets = f" -> ({', '.join(op.result_types)})" if op.result_types else ""
+        lines.append(f"{pad}{prefix}scf.if {_v(op.operands[0])}{rets} {{")
+        _print_region(op.regions[0], depth, lines)
+        if len(op.regions) == 2:
+            lines.append(pad + "} else {")
+            _print_region(op.regions[1], depth, lines)
+        lines.append(pad + "}")
+        return
+
     lines.append(pad + prefix + _print_body(op))
 
 
@@ -47,13 +57,18 @@ def _for_header(op: Op) -> str:
 def _print_body(op: Op) -> str:
     name = op.name
     if name == "arith.constant":
-        return f"arith.constant {op.attributes['value']} : {op.result_types[0]}"
+        val = op.attributes["value"]
+        if val in ("true", "false"):  # boolean constants print without a type
+            return f"arith.constant {val}"
+        return f"arith.constant {val} : {op.result_types[0]}"
     if name in ("arith.cmpi", "arith.cmpf"):
         a, b = op.operands
         return f"{name} {op.attributes['predicate']}, {_v(a)}, {_v(b)} : {op.result_types[0]}"
+    if name.startswith("arith.") and "src_type" in op.meta:  # unary cast
+        return f"{name} {_v(op.operands[0])} : {op.meta['src_type']} to {op.result_types[0]}"
     if name.startswith("arith."):
-        a, b = op.operands
-        return f"{name} {_v(a)}, {_v(b)} : {op.result_types[0]}"
+        operands = ", ".join(_v(o) for o in op.operands)
+        return f"{name} {operands} : {op.result_types[0]}"
     if name == "memref.load":
         mem, *idx = op.operands
         idx_s = ", ".join(_v(i) for i in idx)
