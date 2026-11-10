@@ -37,12 +37,13 @@ _LOAD_RE = re.compile(r"^memref\.load\s+%([\w$.-]+)\[(.*?)\]\s*:\s*(.+)$")
 _STORE_RE = re.compile(r"^memref\.store\s+%([\w$.-]+)\s*,\s*%([\w$.-]+)\[(.*?)\]\s*:\s*(.+)$")
 _ALLOC_RE = re.compile(r"^memref\.alloc[a]?\(\s*\)\s*:\s*(.+)$")
 _CONST_RE = re.compile(r"^arith\.constant\s+(.+?)\s*:\s*(.+)$")
-_BINARY_RE = re.compile(r"^(arith\.\w+)\s+%([\w$.-]+)\s*,\s*%([\w$.-]+)\s*:\s*(.+)$")
+# Same-type n-ary ops: binary arith and arith.select %c, %a, %b : T.
+_NARY_RE = re.compile(r"^((?:arith|math)\.\w+)\s+(%[\w$.-]+(?:\s*,\s*%[\w$.-]+)+)\s*:\s*(.+)$")
 # Unary casts: arith.index_cast / sitofp / trunci / extf / bitcast ...
 # form "op %x : <src> to <dst>"
-_CAST_RE = re.compile(r"^(arith\.\w+)\s+%([\w$.-]+)\s*:\s*(.+?)\s+to\s+(.+)$")
+_CAST_RE = re.compile(r"^((?:arith|math)\.\w+)\s+%([\w$.-]+)\s*:\s*(.+?)\s+to\s+(.+)$")
 # Unary same-type ops, e.g. "arith.negf %x : f64".
-_UNARY_RE = re.compile(r"^(arith\.\w+)\s+%([\w$.-]+)\s*:\s*(.+)$")
+_UNARY_RE = re.compile(r"^((?:arith|math)\.\w+)\s+%([\w$.-]+)\s*:\s*(.+)$")
 _CMP_RE = re.compile(r"^(arith\.cmp[if])\s+(\w+)\s*,\s*%([\w$.-]+)\s*,\s*%([\w$.-]+)\s*:\s*(.+)$")
 _YIELD_RE = re.compile(r"^scf\.yield(?:\s+(.*?)\s*:\s*(.+))?$")
 _RETURN_RE = re.compile(r"^(?:func\.)?return(?:\s+(.*?)\s*:\s*(.+))?$")
@@ -216,15 +217,15 @@ class _Parser:
             return Op(cm.group(1), results, ["i1"], [cm.group(3), cm.group(4)],
                       {"predicate": cm.group(2)},
                       meta={"operand_type": cm.group(5).strip()})
-        if rhs.startswith("arith."):
+        if rhs.startswith(("arith.", "math.")):
             cm = _CAST_RE.match(rhs)
             if cm:  # unary cast: op %x : src to dst
                 return Op(cm.group(1), results, [cm.group(4).strip()],
                           [cm.group(2)], meta={"src_type": cm.group(3).strip()})
-            bm = _BINARY_RE.match(rhs)
+            bm = _NARY_RE.match(rhs)
             if bm:
-                return Op(bm.group(1), results, [bm.group(4).strip()],
-                          [bm.group(2), bm.group(3)])
+                return Op(bm.group(1), results, [bm.group(3).strip()],
+                          _names(bm.group(2)))
             um = _UNARY_RE.match(rhs)  # e.g. arith.negf %x : f64
             if um:
                 return Op(um.group(1), results, [um.group(3).strip()], [um.group(2)])

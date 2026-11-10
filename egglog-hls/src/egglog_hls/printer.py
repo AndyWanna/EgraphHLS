@@ -64,9 +64,9 @@ def _print_body(op: Op) -> str:
     if name in ("arith.cmpi", "arith.cmpf"):
         a, b = op.operands
         return f"{name} {op.attributes['predicate']}, {_v(a)}, {_v(b)} : {op.meta['operand_type']}"
-    if name.startswith("arith.") and "src_type" in op.meta:  # unary cast
+    if name.startswith(("arith.", "math.")) and "src_type" in op.meta:  # unary cast
         return f"{name} {_v(op.operands[0])} : {op.meta['src_type']} to {op.result_types[0]}"
-    if name.startswith("arith."):
+    if name.startswith(("arith.", "math.")):
         operands = ", ".join(_v(o) for o in op.operands)
         return f"{name} {operands} : {op.result_types[0]}"
     if name == "memref.load":
