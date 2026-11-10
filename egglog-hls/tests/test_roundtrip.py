@@ -52,3 +52,29 @@ def _all_ops(module, name):
     for func in module.funcs:
         walk(func.body)
     return found
+
+
+def test_multi_result_prints_as_plain_result_list() -> None:
+    # "%0:2 = ..." with "%0#1" uses must come back as legal MLIR: canonical
+    # names, never a "#" in a result position.
+    text = """func.func @f(%a: i32) -> i32 {
+  %0:2 = "test.pair"(%a) : (i32) -> (i32, i32)
+  %1 = arith.addi %0#0, %0#1 : i32
+  return %1 : i32
+}
+"""
+    result = roundtrip_text(text)
+    assert result.ok, result.diff
+    assert "#" not in result.output_text
+    assert "%1, %2 = \"test.pair\"(%0)" in result.output_text
+
+
+def test_opaque_op_keeps_string_literals_intact() -> None:
+    text = """func.func @f(%a: i32) {
+  "test.log"(%a) {fmt = "%d items"} : (i32) -> ()
+  return
+}
+"""
+    result = roundtrip_text(text)
+    assert result.ok, result.diff
+    assert '{fmt = "%d items"}' in result.output_text

@@ -147,5 +147,6 @@ def reg2mem(module: Module) -> Module:
     memref stores. Loops that do not match the pattern are unchanged."""
     out = copy.deepcopy(module)
     for func in out.funcs:
-        _reg2mem_region(func.body)
+        if isinstance(func, Func):
+            _reg2mem_region(func.body)
     return out

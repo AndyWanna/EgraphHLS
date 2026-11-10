@@ -34,6 +34,8 @@ from egglog_hls.parser import ParseError
 CGEIST = os.environ.get("CGEIST", "/work/scalehls/polygeist/build/bin/cgeist")
 # Oracle: real MLIR must accept what we print. Identity + fixpoint only compare
 # our parser against our printer, so they cannot catch invalid output.
+# clang builtin headers (stddef.h etc.); without them libc headers fail to parse.
+CLANG_INC = [a for d in glob.glob("/work/scalehls/build/lib/clang/*/include") for a in ("-I", d)]
 MLIR_OPT = os.environ.get("MLIR_OPT", "/work/scalehls/build/bin/scalehls-opt")
 ROOT = sys.argv[1]
 OUT = os.environ.get("BAKEOFF_OUT") or tempfile.mkdtemp(prefix="bakeoff_")
@@ -53,9 +55,9 @@ def func_names(cfile):
     return out
 
 
-def run_cgeist(cfile, srcdir, func):
-    out = os.path.join(OUT, f"{pathlib.Path(cfile).stem}__{func}.mlir")
-    cmd = [CGEIST, "-S", "-O0", "-I", srcdir, f"-function={func}", cfile, "-o", out]
+def run_cgeist(cfile, srcdir, func, kernel):
+    out = os.path.join(OUT, f"{kernel}__{func}.mlir")
+    cmd = [CGEIST, "-S", "-O0", *CLANG_INC, "-I", srcdir, f"-function={func}", cfile, "-o", out]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     except subprocess.TimeoutExpired:
@@ -75,10 +77,29 @@ def mlir_rejects(text):
     return next((l for l in p.stderr.splitlines() if "error" in l), p.stderr)[:80]
 
 
+def declared_top(d):
+    """(top function, source file) from HLSFactory's hls_template.tcl, so we
+    test the real kernel rather than whichever helper compiles first."""
+    tcl = os.path.join(d, "hls_template.tcl")
+    if not os.path.exists(tcl):
+        return None, None
+    txt = open(tcl, errors="ignore").read()
+    top = re.search(r"(?m)^\s*set_top\s+(\S+)", txt)
+    src = re.search(r"(?m)^\s*add_files\s+(?!-tb)(\S+\.c)\b", txt)
+    return (top.group(1) if top else None), (src.group(1) if src else None)
+
+
 def compile_kernel(d):
     srcdir = os.path.join(d, "src")
     if not os.path.isdir(srcdir):
         srcdir = d
+    kernel = os.path.basename(d)
+    top, src = declared_top(d)
+    if top and src:
+        for base in (srcdir, d):
+            if os.path.exists(os.path.join(base, src)):
+                return top, run_cgeist(os.path.join(base, src), base, top, kernel)
+        return top, None
     cs = sorted(glob.glob(os.path.join(srcdir, "*.c")))
     primary = [c for c in cs if not SKIP_FILE.search(os.path.basename(c))] or cs
     for c in primary:
@@ -87,7 +108,7 @@ def compile_kernel(d):
         if base not in cands:
             cands.insert(0, base)
         for fn in cands:
-            mlir = run_cgeist(c, srcdir, fn)
+            mlir = run_cgeist(c, srcdir, fn, kernel)
             if mlir is not None:
                 return fn, mlir
     return None, None
@@ -99,7 +120,7 @@ def main():
         name = os.path.basename(d)
         fn, mlir = compile_kernel(d)
         if mlir is None:
-            results.append((name, "CGEIST_FAIL", "no function emitted a module"))
+            results.append((name, "CGEIST_FAIL", f"top={fn}: no module emitted"))
             continue
         try:
             r = roundtrip_text(mlir)

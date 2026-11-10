@@ -20,7 +20,7 @@ import json
 
 from egglog import EGraph, Expr, String, Vec, function
 
-from .ir import Func, Module, Op, Region
+from .ir import Func, Module, Op, Region, Verbatim
 
 
 # --- e-graph sorts -------------------------------------------------------
@@ -68,6 +68,10 @@ def mk_func(
     body: RegionTerm,
     attrs_raw: String,
 ) -> FuncTerm: ...
+
+
+@function
+def mk_verbatim(text: String) -> FuncTerm: ...
 
 
 @function
@@ -119,7 +123,8 @@ def _encode_func(func: Func) -> FuncTerm:
 
 def _encode_module(module: Module) -> ModuleTerm:
     return mk_module(
-        _vec(FuncTerm, [_encode_func(f) for f in module.funcs]),
+        _vec(FuncTerm, [mk_verbatim(String(f.text)) if isinstance(f, Verbatim)
+                        else _encode_func(f) for f in module.funcs]),
         String(module.attributes_raw),
     )
 
@@ -196,4 +201,5 @@ def from_egraph(egraph: EGraph, term: ModuleTerm) -> Module:
     extracted = egraph.extract(term)
     node = _walk(extracted.__egg_typed_expr__)
     _, (funcs, attrs_raw) = node
-    return Module(funcs=[_decode_func(f) for f in funcs], attributes_raw=attrs_raw)
+    return Module(funcs=[Verbatim(f[1][0]) if f[0] == "mk_verbatim" else _decode_func(f)
+                         for f in funcs], attributes_raw=attrs_raw)

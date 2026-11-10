@@ -5,17 +5,40 @@
 toolchain container. Numbers below are the round-trip pass rate (cgeist emitted
 a module *and* the e-graph round-trip was identity + fixpoint).
 
-## Results
+## Results (2026-11-10)
+
+Each kernel is compiled at its **declared top function** (`set_top` /
+`add_files` in HLSFactory's `hls_template.tcl`). Earlier numbers picked the first
+function that compiled, which was often a helper (e.g. `rj_xtime` for aes), so
+they overstated coverage. OK now also requires `scalehls-opt` to accept the
+printed output (the identity + fixpoint checks only compare our parser against
+our printer, and missed two real printer bugs).
 
 | suite | round-trip OK | notes |
 |-------|---------------|-------|
 | **polybench** | **9 / 9** | atax, bicg, gemm, gesummv, k2mm, k3mm, mvt, syr2k, syrk |
-| **machsuite** | **3 / 19** | gemm_blocked, gemm_ncubed, stencil2D |
+| **machsuite** | **13 / 19** | every kernel cgeist can lower round-trips (13 / 13) |
 
-Polybench is the affine-loop-nest sweet spot this track targets, and it is
-fully covered. MachSuite is dominated by irregular kernels (graph traversal,
-sort, molecular dynamics, FFT) that lower to dialects/constructs the round-trip
-does not model yet, and a couple that cgeist itself will not lower.
+MachSuite failures are all in the frontend (cgeist, LLVM Nov-2022 pin), before
+egglog-hls sees anything:
+
+| kernel | cgeist failure |
+|--------|----------------|
+| aes_table, aes_tableless, viterbi | `'arith.extsi' op operation destroyed but still has uses` (crash) |
+| sort_merge | `operand #0 does not dominate this use` (sort.c:38) |
+| md_grid | assertion in `ValueCategory::getValue` ("must have shape 1") |
+| common | utility dir, no top function |
+
+## How the remaining gaps were closed (2026-11-10)
+
+- **Opaque fallback**: any single-line op we do not model is kept as text
+  segments with its SSA uses as holes, so it round-trips and still renumbers.
+  Covers `affine.load/store`, `polygeist.*`, `llvm.*`, `scf.condition`, ...
+- **Multi-result ops**: `%x:N` expands to N results, uses are `%x#i`.
+- **`scf.while`** parsed first-class (before/after regions, `^bb0` args).
+- **Module-scope `llvm.mlir.global` / `llvm.func`** kept verbatim.
+- `arith.select`, `math.*`; fixed `arith.cmpi` printing the result type and a
+  greedy func-header regex that ate `-> (T)`.
 
 ## What was added to hit polybench 9/9
 
@@ -26,21 +49,14 @@ does not model yet, and a couple that cgeist itself will not lower.
   (never an `AttributeError`), so the sweep buckets it cleanly
 - module- and func-level `attributes {...}` preserved verbatim
 
-## Backlog (ranked by MachSuite coverage impact)
+## Backlog
 
-1. **affine dialect** (`affine.for`/`affine.load`/`affine.store`, affine maps) —
-   cgeist emits it for several kernels (fft_transpose, sort_radix, stencil3D,
-   and behind other gaps). Biggest single lever.
-2. **Generic opaque-op fallback** — capture any unrecognized op with its
-   result/operand SSA values so it round-trips as an opaque e-graph node
-   instead of failing. Would also absorb `polygeist.memref2pointer` and
-   `math.*` (e.g. `math.exp`). Needs care so SSA value-numbering stays correct.
-3. **multi-result ops** — `%10:2 = scf.for ... -> (t1, t2)` compact syntax and
-   `%10#0` result refs (sort_merge).
-4. **module-scope `llvm.mlir.global`** and other non-func top-level ops (viterbi).
-5. **RT_FAIL on aes_table / aes_tableless** — parses and is identity, but the
-   print->reparse fixpoint does not hold. A construct prints in a form that does
-   not reparse identically; needs isolating. (Known bug, not just missing coverage.)
+1. **Dataflow e-graph encoding.** The current bridge embeds SSA names in every
+   op term, so nothing ever merges and no rewrite can match across ops. The
+   round-trip is lossless but cannot optimize. Next milestone.
+2. Lower `affine.load/store` with constant / `symbol()` indices to `memref` in
+   `normalize.py`, so the e-graph sees one memory dialect.
+3. Frontend: try a newer Polygeist for the 5 cgeist crashes.
 
 ## Out of scope (for the affine track)
 

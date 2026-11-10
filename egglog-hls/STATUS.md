@@ -1,7 +1,6 @@
 # egglog-hls — status / resume notes
 
-Pick-up doc for the EgraphHLS DialEgg track. Last updated during the 2026-07-21
-session. Also mirrored in claude-mem (project `github`, observation #33823).
+Pick-up doc for the EgraphHLS DialEgg track. Last updated 2026-11-10. Also mirrored in claude-mem (project `github`, observation #33823).
 
 ## Where things are
 
@@ -25,7 +24,9 @@ C  --cgeist-->  MLIR  --egglog e-graph-->  MLIR      (identity + fixpoint)
 - Real egglog engine: encode MLIR -> egglog terms -> EGraph -> extract -> decode.
 - Both `scf.for` shapes (store form + iter_args/yield) survive.
 - `reg2mem` normalizes the loop-carried accumulator to store form.
-- **Coverage:** polybench **9/9**, machsuite **3/19** (see `bench/COVERAGE.md`).
+- **Coverage:** polybench **9/9**, machsuite **13/19** at the declared top
+  functions; the 6 misses are cgeist crashes, not ours (see `bench/COVERAGE.md`).
+- Every OK output is also validated by `scalehls-opt` (bakeoff `INVALID` bucket).
 - 14 tests passing.
 
 ## How to resume
@@ -53,22 +54,24 @@ Toolchain tools: `scalehls-opt` + `scalehls-translate` in
 Built Release+asserts (Ubuntu 22.04, clang-14, LLVM Nov-2022 pin). To reclaim
 ~20 GB: `docker rm -f scalehls && docker volume rm scalehls-data`.
 
-## Next steps (ranked, from bench/COVERAGE.md)
+## Next steps (ranked)
 
-1. **Affine dialect** (`affine.for/load/store`, affine maps) — biggest lever for
-   machsuite coverage; cgeist emits it for many kernels.
-2. **Generic opaque-op fallback** — unknown ops round-trip as opaque e-graph
-   nodes (absorbs `polygeist.memref2pointer`, `math.*`). Must keep SSA
-   value-numbering correct. Worth a design chat with Andy.
-3. **Multi-result ops** — `%10:2 = scf.for ... -> (t1, t2)` + `%10#0` refs.
-4. **Module-scope `llvm.mlir.global`** and other non-func top-level ops.
-5. **Bug:** aes_table / aes_tableless parse and are identity but fail the
-   print->reparse fixpoint. Isolate the construct that prints non-reparseably.
+1. **Dataflow e-graph encoding** (`egraph_dataflow.py`, beside the old bridge):
+   pure ops as name-free terms over a `Val` sort, effectful ops as an ordered
+   `Vec[Stmt]`, decode by scoped memoized emit. Identity has to be redefined
+   (CSE/reordering now happen). Design in claude-mem / Fable consult 2026-11-10.
+2. First rewrite rules: constant fold (bitwidth-aware), x+0 / x*1,
+   mul-by-2^k -> shli, udiv-by-2^k -> shrui, a*b + a*c -> a*(b+c).
+3. Sam-owned contribution: HLS cost model (DSP for mul, free const shifts,
+   width-proportional LUTs for add) + normalization passes; report per-kernel
+   cost deltas.
+4. Lower constant-index `affine.load/store` to `memref` in `normalize.py`.
 
 ## Open decisions (need Sam)
 
-- Push `sam/egglog-roundtrip` and open a PR to Andy's repo? (Commits authored as
-  `sacredvoid`; set a real email before pushing if desired.)
+- PR #1 (`sam/egglog-roundtrip`) is open on AndyWanna/EgraphHLS. Coverage work
+  is on `sam/affine-and-opaque`, stacked on it.
+- Modal credentials for heavy runs: `../.env.modal` (git-excluded, mode 600).
 - Post the Slack progress update to Andy (round-trip works + polybench 9/9).
 - O-1 angle: keep a differentiated component Sam-owned (normalization passes /
   cost functions) since the DialEgg-vs-custom-Rust framing affects Criterion 5.

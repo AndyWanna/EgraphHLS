@@ -8,7 +8,7 @@ positional.
 
 from __future__ import annotations
 
-from .ir import Func, Module, Op, Region
+from .ir import Func, Module, Op, Region, Verbatim
 
 _INDENT = "  "
 
@@ -17,9 +17,19 @@ def _v(name: str) -> str:
     return "%" + name
 
 
+def _lhs(results: list[str]) -> str:
+    """Result list. Results parsed from "%x:N" are named x#0..x#N-1; re-pack
+    them so the text is legal MLIR (uses stay "%x#i")."""
+    if results and "#" in results[0]:
+        base = results[0].split("#", 1)[0]
+        if results == [f"{base}#{i}" for i in range(len(results))]:
+            return f"%{base}:{len(results)}"
+    return ", ".join(_v(r) for r in results)
+
+
 def _print_op(op: Op, depth: int, lines: list[str]) -> None:
     pad = _INDENT * depth
-    lhs = ", ".join(_v(r) for r in op.results)
+    lhs = _lhs(op.results)
     prefix = f"{lhs} = " if op.results else ""
 
     if op.name == "scf.for":
@@ -35,6 +45,20 @@ def _print_op(op: Op, depth: int, lines: list[str]) -> None:
         if len(op.regions) == 2:
             lines.append(pad + "} else {")
             _print_region(op.regions[1], depth, lines)
+        lines.append(pad + "}")
+        return
+
+    if op.name == "scf.while":
+        before, after = op.regions
+        pairs = ", ".join(f"{_v(a)} = {_v(i)}" for a, i in zip(before.args, op.operands))
+        lines.append(f"{pad}{prefix}scf.while ({pairs}) : ({', '.join(before.arg_types)})"
+                     f" -> ({', '.join(op.result_types)}) {{")
+        _print_region(before, depth, lines)
+        lines.append(pad + "} do {")
+        if after.args:
+            bb = ", ".join(f"{_v(a)}: {t}" for a, t in zip(after.args, after.arg_types))
+            lines.append(f"{pad}^bb0({bb}):")
+        _print_region(after, depth, lines)
         lines.append(pad + "}")
         return
 
@@ -56,6 +80,9 @@ def _for_header(op: Op) -> str:
 
 def _print_body(op: Op) -> str:
     name = op.name
+    if "parts" in op.meta:  # opaque fallback: interleave text and value holes
+        parts = op.meta["parts"]
+        return parts[0] + "".join(_v(o) + p for o, p in zip(op.operands, parts[1:]))
     if name == "arith.constant":
         val = op.attributes["value"]
         if val in ("true", "false"):  # boolean constants print without a type
@@ -111,6 +138,9 @@ def print_module(module: Module) -> str:
     head = f"module {module.attributes_raw} {{" if module.attributes_raw else "module {"
     lines = [head]
     for func in module.funcs:
-        _print_func(func, 1, lines)
+        if isinstance(func, Verbatim):
+            lines.extend(_INDENT + t for t in func.text.splitlines())
+        else:
+            _print_func(func, 1, lines)
     lines.append("}")
     return "\n".join(lines) + "\n"

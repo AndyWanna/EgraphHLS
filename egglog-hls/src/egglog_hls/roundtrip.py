@@ -43,7 +43,9 @@ def roundtrip_text(text: str) -> RoundTripResult:
 
     identity_ok = structurally_equal(source, result)
     # Fixpoint: printing then reparsing the result must not drift.
-    reparsed = parse_module(print_module(result))
+    # Print canonically: raw names may be packed-result refs ("x#0") that only
+    # become a legal result list once renumbered.
+    reparsed = parse_module(print_module(canonicalize(result)))
     fixpoint_ok = structurally_equal(result, reparsed)
 
     diff = "(identical)" if identity_ok else diff_summary(source, result)

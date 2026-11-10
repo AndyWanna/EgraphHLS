@@ -52,8 +52,18 @@ class Func:
 
 
 @dataclass
+class Verbatim:
+    """A module-scope op we keep as raw text (``llvm.mlir.global``,
+    ``llvm.func`` declarations). Holds no SSA values, so it needs no
+    renumbering and round-trips untouched."""
+
+    text: str
+
+
+@dataclass
 class Module:
-    funcs: list[Func] = field(default_factory=list)
+    # Top-level items in source order: functions and verbatim module-scope ops.
+    funcs: list[Func | Verbatim] = field(default_factory=list)
     # Text between "module" and its "{" (e.g. cgeist's dlti/llvm attributes).
     attributes_raw: str = ""
 
@@ -88,6 +98,8 @@ def canonicalize(module: Module) -> Module:
     positional, definition-order name (``"0"``, ``"1"`` ...), per function."""
     out = copy.deepcopy(module)
     for func in out.funcs:
+        if isinstance(func, Verbatim):
+            continue
         mapping: dict[str, str] = {}
         counter = count()
         func.arg_names = [_define(a, mapping, counter) for a in func.arg_names]
