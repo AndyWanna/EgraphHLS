@@ -67,6 +67,20 @@ def _split_top(text: str, sep: str = ",") -> list[str]:
     return out
 
 
+def _match_close(text: str, open_at: int) -> int:
+    """Index of the bracket closing the one at ``open_at`` (any bracket kind
+    counts toward depth, so types like ``memref<4xf32>`` nest correctly)."""
+    depth = 0
+    for i in range(open_at, len(text)):
+        if text[i] in "<([{":
+            depth += 1
+        elif text[i] in ">)]}" and not (text[i] == ">" and text[i - 1] == "-"):
+            depth -= 1
+            if depth == 0:
+                return i
+    raise ParseError(f"unbalanced brackets: {text!r}")
+
+
 def _need(regex: re.Pattern, text: str, kind: str) -> re.Match:
     """Match or raise a clean ParseError (never an AttributeError downstream)."""
     m = regex.match(text)
@@ -125,7 +139,13 @@ class _Parser:
         m = _FUNC_RE.match(header)
         if not m:
             raise ParseError(f"unrecognized func header: {header!r}")
-        name, args_s, trailing = m.group(1), m.group(2), m.group(3).strip()
+        name = m.group(1)
+        # Split args from the trailing "-> ..." with a balanced-paren scan:
+        # a greedy regex would swallow a parenthesized return type "-> (i8)".
+        open_at = header.index("(", m.start(2) - 1)
+        close_at = _match_close(header, open_at)
+        args_s = header[open_at + 1 : close_at]
+        trailing = header[close_at + 1 :].rstrip().removesuffix("{").strip()
         arg_names, arg_types = [], []
         for a in _split_top(args_s):
             am = _ARG_RE.match(a.strip())
@@ -192,8 +212,10 @@ class _Parser:
             raise ParseError(f"unrecognized arith.constant: {rhs!r}")
         if rhs.startswith(("arith.cmpi", "arith.cmpf")):
             cm = _need(_CMP_RE, rhs, "arith.cmp")
+            # MLIR prints the *operand* type after ':'; the result is i1.
             return Op(cm.group(1), results, ["i1"], [cm.group(3), cm.group(4)],
-                      {"predicate": cm.group(2)})
+                      {"predicate": cm.group(2)},
+                      meta={"operand_type": cm.group(5).strip()})
         if rhs.startswith("arith."):
             cm = _CAST_RE.match(rhs)
             if cm:  # unary cast: op %x : src to dst

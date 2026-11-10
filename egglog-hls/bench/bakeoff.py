@@ -32,8 +32,12 @@ from egglog_hls import roundtrip_text
 from egglog_hls.parser import ParseError
 
 CGEIST = os.environ.get("CGEIST", "/work/scalehls/polygeist/build/bin/cgeist")
+# Oracle: real MLIR must accept what we print. Identity + fixpoint only compare
+# our parser against our printer, so they cannot catch invalid output.
+MLIR_OPT = os.environ.get("MLIR_OPT", "/work/scalehls/build/bin/scalehls-opt")
 ROOT = sys.argv[1]
-OUT = tempfile.mkdtemp(prefix="bakeoff_")
+OUT = os.environ.get("BAKEOFF_OUT") or tempfile.mkdtemp(prefix="bakeoff_")
+os.makedirs(OUT, exist_ok=True)
 
 FN_DEF = re.compile(r"(?m)^[A-Za-z_][\w\s\*]*?\b([A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{")
 SKIP_FILE = re.compile(r"(test|tb|bench|_main|support|check|golden)", re.I)
@@ -60,6 +64,15 @@ def run_cgeist(cfile, srcdir, func):
         return None
     txt = open(out).read()
     return txt if "func.func" in txt else None
+
+
+def mlir_rejects(text):
+    """None if MLIR_OPT parses+verifies ``text``, else its first error line."""
+    p = subprocess.run([MLIR_OPT, "--allow-unregistered-dialect", "-"], input=text,
+                       capture_output=True, text=True, timeout=60)
+    if p.returncode == 0:
+        return None
+    return next((l for l in p.stderr.splitlines() if "error" in l), p.stderr)[:80]
 
 
 def compile_kernel(d):
@@ -90,8 +103,11 @@ def main():
             continue
         try:
             r = roundtrip_text(mlir)
-            results.append((name, "OK", f"fn={fn}") if r.ok
-                           else (name, "RT_FAIL", r.diff[:80]))
+            if not r.ok:
+                results.append((name, "RT_FAIL", r.diff[:80]))
+                continue
+            err = mlir_rejects(r.output_text)
+            results.append((name, "INVALID", err) if err else (name, "OK", f"fn={fn}"))
         except ParseError as e:
             results.append((name, "PARSE_GAP", str(e)[:80]))
         except Exception as e:  # never let one kernel abort the sweep
