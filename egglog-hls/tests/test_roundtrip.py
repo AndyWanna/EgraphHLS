@@ -1,4 +1,4 @@
-"""The core guarantee: every example goes MLIR -> e-graph -> MLIR unchanged."""
+"""Every example survives MLIR -> e-graph -> MLIR."""
 
 from __future__ import annotations
 
@@ -31,7 +31,6 @@ def test_parse_print_are_inverse(example_text: str) -> None:
 
 
 def test_yield_form_survives_the_egraph() -> None:
-    """The iter_args/yield shape (the ScaleHLS gotcha) must not be lost."""
     text = (pathlib.Path(__file__).parent.parent / "examples" / "matmul_yield.mlir").read_text()
     out = roundtrip(parse_module(text))
     fors = _all_ops(out, "scf.for")
@@ -55,8 +54,7 @@ def _all_ops(module, name):
 
 
 def test_multi_result_prints_as_plain_result_list() -> None:
-    # "%0:2 = ..." with "%0#1" uses must come back as legal MLIR: canonical
-    # names, never a "#" in a result position.
+    # %0:2 with %0#1 uses must come back as a plain result list
     text = """func.func @f(%a: i32) -> i32 {
   %0:2 = "test.pair"(%a) : (i32) -> (i32, i32)
   %1 = arith.addi %0#0, %0#1 : i32

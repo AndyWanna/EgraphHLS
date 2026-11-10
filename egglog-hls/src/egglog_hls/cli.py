@@ -1,12 +1,4 @@
-"""Command-line entry point.
-
-    python -m egglog_hls roundtrip path.mlir [--emit out.mlir] [-q]
-    python -m egglog_hls reg2mem   path.mlir [--emit out.mlir]
-
-``roundtrip`` runs MLIR -> e-graph -> MLIR and verifies the result is unchanged
-(exit code 0 on success, 1 on a verification failure). ``reg2mem`` prints the
-normalized form.
-"""
+"""CLI: python -m egglog_hls {roundtrip,reg2mem,optimize} path.mlir [--emit out.mlir]"""
 
 from __future__ import annotations
 
@@ -48,6 +40,31 @@ def _cmd_reg2mem(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_optimize(args: argparse.Namespace) -> int:
+    from .cost import hls_cost
+    from .egraph_dataflow import optimize
+    from .interp import Unsupported, equivalent
+    from .rules import int_rules
+
+    module = parse_module(_read(args.path))
+    out, before, after = optimize(module, int_rules(), hls_cost, args.iters)
+    text = print_module(canonicalize(out))
+    if args.emit:
+        _write(args.emit, text)
+    else:
+        sys.stdout.write(text)
+    sys.stderr.write(f"cost {before} -> {after} ({100 * (before - after) / max(before, 1):.1f}%)\n")
+    if args.check:
+        try:
+            same = equivalent(module, out)
+        except Unsupported as e:
+            sys.stderr.write(f"check skipped: {e}\n")
+            return 0
+        sys.stderr.write(f"check: {'equivalent' if same else 'MISMATCH'}\n")
+        return 0 if same else 1
+    return 0
+
+
 def _read(path: str) -> str:
     with open(path, encoding="utf-8") as fh:
         return fh.read()
@@ -72,6 +89,14 @@ def main(argv: list[str] | None = None) -> int:
     rm.add_argument("path")
     rm.add_argument("--emit", help="write output MLIR to this file")
     rm.set_defaults(func=_cmd_reg2mem)
+
+    op = sub.add_parser("optimize", help="apply integer rewrites, extract by HLS cost")
+    op.add_argument("path")
+    op.add_argument("--emit", help="write output MLIR to this file")
+    op.add_argument("--iters", type=int, default=6)
+    op.add_argument("--check", action="store_true",
+                    help="compare against the input with the reference interpreter")
+    op.set_defaults(func=_cmd_optimize)
 
     args = parser.parse_args(argv)
     return args.func(args)

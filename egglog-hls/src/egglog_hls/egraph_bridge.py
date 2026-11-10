@@ -1,17 +1,7 @@
-"""The MLIR <-> e-graph boundary, built on the real ``egglog`` engine.
+"""MLIR <-> e-graph boundary on top of egglog.
 
-Encoding is generic and dialect-agnostic (the DialEgg philosophy): every op
-becomes one ``mk_op`` term carrying its results, operands, attributes and
-nested regions. Because each op term embeds its own SSA result names, the
-engine's hash-consing never merges two syntactically distinct ops, so the
-round-trip is lossless.
-
-``to_egraph`` builds the term and inserts it into a fresh ``EGraph``;
-``from_egraph`` extracts it back and walks the extracted term
-(``__egg_typed_expr__``) into the IR model. With no rewrite rules registered
-the extracted term equals the inserted one, which is the identity round-trip.
-The same extraction path is what will lower a *rewritten* e-graph back to MLIR
-once rules are added.
+Every op is one mk_op term with its results, operands, attributes and regions. Each term
+embeds its SSA result names, so hash-consing never merges distinct ops.
 """
 
 from __future__ import annotations
@@ -130,8 +120,7 @@ def _encode_module(module: Module) -> ModuleTerm:
 
 
 def to_egraph(module: Module) -> tuple[EGraph, ModuleTerm]:
-    """Insert ``module`` into a fresh EGraph. Returns the graph and the root
-    term handle (needed to extract it back)."""
+    """Insert module into a fresh EGraph; returns the graph and the root term."""
     egraph = EGraph()
     term = _encode_module(module)
     egraph.register(term)
@@ -140,9 +129,7 @@ def to_egraph(module: Module) -> tuple[EGraph, ModuleTerm]:
 
 # --- decode: extracted term -> IR ---------------------------------------
 def _callable_name(callable_) -> str:
-    """Constructor/function name of a decl callable, across egglog versions.
-    v13: FunctionRef/InitRef carry ``.ident.name``; v11: FunctionRef has
-    ``.name`` and InitRef has ``.class_name``."""
+    """Constructor name of a decl callable (v13: .ident.name; v11: .name / .class_name)."""
     ident = getattr(callable_, "ident", None)
     if ident is not None:
         return ident.name
@@ -150,9 +137,7 @@ def _callable_name(callable_) -> str:
 
 
 def _walk(typed_expr):
-    """Turn an extracted egglog TypedExprDecl into plain Python: string leaves
-    stay strings, ``Vec`` becomes a list, every other constructor becomes a
-    ``(constructor_name, [children...])`` tuple."""
+    """Extracted term -> strings, lists (Vec) and (constructor_name, children) tuples."""
     expr = typed_expr.expr
     if hasattr(expr, "value") and not hasattr(expr, "callable"):  # LitDecl
         return expr.value

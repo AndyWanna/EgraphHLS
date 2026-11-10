@@ -1,30 +1,8 @@
-"""reg2mem: normalize the "annoying" scf.for shape before optimization.
+"""reg2mem: demote loop-carried accumulators (scf.for iter_args + scf.yield) to load/store form.
 
-Andy's gotcha: a reduction can lower either to a clean store form or to an
-scf.for that carries the accumulator as an iter_arg and ends in scf.yield. The
-second form is semantically identical but breaks many ScaleHLS passes. The fix
-is reg2mem -> optimize -> mem2reg. This module implements the reg2mem
-direction for the loop-carried-accumulator pattern (the one in the matmul
-screenshot):
-
-    %init = memref.load %M[I] : T
-    %r    = scf.for ... iter_args(%acc = %init) -> (T) { ... scf.yield %y : T }
-    memref.store %r, %M[I] : T
-
-becomes the store form (no iter_args), with the load pulled to the top of the
-loop body and the yield turned into a store:
-
-    scf.for ... {
-      %acc = memref.load %M[I] : T
-      ...
-      memref.store %y, %M[I] : T
-    }
-
-The transform is conservative: a loop that does not match the pattern exactly
-(matching memref + loop-invariant indices for every carried value, with the
-pre-load used only as the init) is left untouched. It runs bottom-up so nested
-loops normalize first. This is a structural pass, deliberately kept out of the
-e-graph: it is a normalization, not an equational rewrite.
+    %init = memref.load %M[I]; %r = scf.for ... iter_args(%acc = %init) { ...; scf.yield %y }; memref.store %r, %M[I]
+becomes a load at the top of the body and a store of %y at the end. Loops that do not
+match exactly are left alone.
 """
 
 from __future__ import annotations
@@ -35,7 +13,7 @@ from .ir import Func, Module, Op, Region
 
 
 def _load_key(op: Op) -> tuple | None:
-    """(memref, indices, type) identifying the slot a memref.load reads."""
+    """(memref, indices, type) of the slot a load reads."""
     if op.name != "memref.load":
         return None
     mem, *idx = op.operands
@@ -59,8 +37,7 @@ def _uses(ops: list[Op], value: str) -> int:
 
 
 def _reg2mem_loop(region: Region, idx: int) -> bool:
-    """Try to rewrite the scf.for at ``region.ops[idx]`` into store form.
-    Returns True on success (mutating ``region.ops``)."""
+    """Rewrite the scf.for at region.ops[idx] in place; False if it does not match."""
     loop = region.ops[idx]
     accs = loop.regions[0].args[1:]          # skip induction var
     inits = loop.operands[3:]
@@ -74,21 +51,18 @@ def _reg2mem_loop(region: Region, idx: int) -> bool:
     if len(yielded) != len(accs) or len(loop.results) != len(accs):
         return False
 
-    # Each init must come from a memref.load in this region, used only here.
     pre_loads: list[Op] = []
     slots: list[tuple] = []
     for init in inits:
         producer = next((o for o in region.ops[:idx] if init in o.results), None)
         if producer is None or _load_key(producer) is None:
             return False
-        # region.ops already contains the loop, so its single use of init (the
-        # iter init) is counted here. More than one use means init is shared.
+        # the loop itself is the one allowed use of init
         if _uses(region.ops, init) != 1:
-            return False  # init reused beyond this loop; bail
+            return False
         pre_loads.append(producer)
         slots.append(_load_key(producer))
 
-    # Each loop result must be stored back to the matching slot.
     post_stores: list[Op] = []
     for res, slot in zip(loop.results, slots):
         store = next(
@@ -100,7 +74,6 @@ def _reg2mem_loop(region: Region, idx: int) -> bool:
             return False
         post_stores.append(store)
 
-    # All checks passed: rewrite.
     new_loads = [
         Op("memref.load", [acc], [_elem_of(slot[2])], [slot[0], *slot[1]],
            meta={"memref_type": slot[2]})
@@ -113,7 +86,6 @@ def _reg2mem_loop(region: Region, idx: int) -> bool:
     ]
     body.ops = new_loads + body.ops[:-1] + new_stores
 
-    # Demote the loop to store form.
     loop.operands = loop.operands[:3]
     loop.results = []
     loop.result_types = []
@@ -143,8 +115,7 @@ def _reg2mem_region(region: Region) -> None:
 
 
 def reg2mem(module: Module) -> Module:
-    """Return a copy of ``module`` with loop-carried accumulators demoted to
-    memref stores. Loops that do not match the pattern are unchanged."""
+    """Copy of module with matching loop-carried accumulators demoted to stores."""
     out = copy.deepcopy(module)
     for func in out.funcs:
         if isinstance(func, Func):

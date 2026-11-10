@@ -1,26 +1,13 @@
-# Frontend coverage bake-off
+# Frontend coverage
 
-`C --cgeist--> MLIR --egglog round-trip--> MLIR`, over HLSFactory
-(`hlsfactory/hls_dataset_sources`). Run with `bench/bakeoff.py` inside the
-toolchain container. Numbers below are the round-trip pass rate (cgeist emitted
-a module *and* the e-graph round-trip was identity + fixpoint).
-
-## Results (2026-11-10)
-
-Each kernel is compiled at its **declared top function** (`set_top` /
-`add_files` in HLSFactory's `hls_template.tcl`). Earlier numbers picked the first
-function that compiled, which was often a helper (e.g. `rj_xtime` for aes), so
-they overstated coverage. OK now also requires `scalehls-opt` to accept the
-printed output (the identity + fixpoint checks only compare our parser against
-our printer, and missed two real printer bugs).
+`C --cgeist--> MLIR --egglog round-trip--> MLIR` over HLSFactory, run with `bench/bakeoff.py`. Each kernel is compiled at its declared top function (`set_top`/`add_files` in `hls_template.tcl`). OK means identity + fixpoint hold and `scalehls-opt` accepts the printed output.
 
 | suite | round-trip OK | notes |
 |-------|---------------|-------|
-| **polybench** | **9 / 9** | atax, bicg, gemm, gesummv, k2mm, k3mm, mvt, syr2k, syrk |
-| **machsuite** | **13 / 19** | every kernel cgeist can lower round-trips (13 / 13) |
+| polybench | 9 / 9 | atax, bicg, gemm, gesummv, k2mm, k3mm, mvt, syr2k, syrk |
+| machsuite | 13 / 19 | every kernel cgeist can lower round-trips (13 / 13) |
 
-MachSuite failures are all in the frontend (cgeist, LLVM Nov-2022 pin), before
-egglog-hls sees anything:
+The MachSuite failures are in cgeist (LLVM Nov-2022 pin), before egglog-hls sees anything:
 
 | kernel | cgeist failure |
 |--------|----------------|
@@ -29,37 +16,21 @@ egglog-hls sees anything:
 | md_grid | assertion in `ValueCategory::getValue` ("must have shape 1") |
 | common | utility dir, no top function |
 
-## How the remaining gaps were closed (2026-11-10)
+pp4fpgas and rosetta are C++ with HLS types (`ap_int`, `hls::stream`) and not attempted.
 
-- **Opaque fallback**: any single-line op we do not model is kept as text
-  segments with its SSA uses as holes, so it round-trips and still renumbers.
-  Covers `affine.load/store`, `polygeist.*`, `llvm.*`, `scf.condition`, ...
-- **Multi-result ops**: `%x:N` expands to N results, uses are `%x#i`.
-- **`scf.while`** parsed first-class (before/after regions, `^bb0` args).
-- **Module-scope `llvm.mlir.global` / `llvm.func`** kept verbatim.
-- `arith.select`, `math.*`; fixed `arith.cmpi` printing the result type and a
-  greedy func-header regex that ate `-> (T)`.
+## Integer rewrites
 
-## What was added to hit polybench 9/9
+`bench/optsweep.py`: dataflow encoding + `rules.py`, extracted with `cost.py` (rough LUT-equivalents, a DSP counts as 100; not calibrated against Vitis yet). check = original and optimized give identical results under `interp.py` on random inputs.
 
-- unary casts (`arith.index_cast`, `sitofp`, ...): `op %x : src to dst`
-- structured `scf.if` (with optional `else` and results)
-- unary arith (`arith.negf`) and boolean `arith.constant true/false`
-- parser hardened: an unrecognized construct always raises `ParseError`
-  (never an `AttributeError`), so the sweep buckets it cleanly
-- module- and func-level `attributes {...}` preserved verbatim
+| kernel | cost before | after | delta | check |
+|--------|------------:|------:|------:|-------|
+| stencil3D | 16672 | 8032 | -51.8% | same |
+| sort_radix | 6867 | 3747 | -45.4% | same |
+| gemm_blocked | 3508 | 2548 | -27.4% | same |
+| stencil2D | 1792 | 1312 | -26.8% | same |
+| gemm_ncubed | 2916 | 2196 | -24.7% | same |
+| fft_transpose | 745288 | 702568 | -5.7% | same |
+| backprop | 95277 | 91197 | -4.3% | skipped (polygeist.subindex) |
+| md_knn | 236172 | 235932 | -0.1% | same |
 
-## Backlog
-
-1. **Dataflow e-graph encoding.** The current bridge embeds SSA names in every
-   op term, so nothing ever merges and no rewrite can match across ops. The
-   round-trip is lossless but cannot optimize. Next milestone.
-2. Lower `affine.load/store` with constant / `symbol()` indices to `memref` in
-   `normalize.py`, so the e-graph sees one memory dialect.
-3. Frontend: try a newer Polygeist for the 5 cgeist crashes.
-
-## Out of scope (for the affine track)
-
-- **pp4fpgas / rosetta**: C++ with HLS types (`ap_int`, `hls::stream`) — a
-  different frontend problem.
-- cgeist could not emit a module for `md_grid` / `common` (utility dir).
+bfs_bulk, bfs_queue, nw, spmv_crs, spmv_ellpack and all of polybench: no change (polybench is float arithmetic, the rules are integer only), all check same.

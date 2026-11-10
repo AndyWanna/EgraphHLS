@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""Frontend coverage bake-off.
-
-For each kernel directory under ROOT:
-  C  --cgeist-->  MLIR  --egglog round-trip-->  MLIR
-
-Auto-detects the top function (filename first, then any function defined in the
-primary source, trying each until cgeist emits a non-empty module), round-trips
-the MLIR through egglog-hls, and buckets the outcome:
-
-  OK          round-trip identity + fixpoint held
-  PARSE_GAP   an MLIR construct egglog-hls does not parse yet (message names it)
-  RT_FAIL     parsed, but the round-trip was not identity/fixpoint
-  CGEIST_FAIL no function produced a non-empty module (C++/HLS, or no kernel)
-
-Run inside the toolchain container (needs cgeist + egglog-hls importable):
+"""Run cgeist + egglog-hls round-trip over each kernel dir under ROOT and bucket the result.
 
   CGEIST=/work/scalehls/polygeist/build/bin/cgeist \
   PYTHONPATH=/work/egglog-hls/src \
@@ -32,10 +18,9 @@ from egglog_hls import roundtrip_text
 from egglog_hls.parser import ParseError
 
 CGEIST = os.environ.get("CGEIST", "/work/scalehls/polygeist/build/bin/cgeist")
-# Oracle: real MLIR must accept what we print. Identity + fixpoint only compare
-# our parser against our printer, so they cannot catch invalid output.
 # clang builtin headers (stddef.h etc.); without them libc headers fail to parse.
 CLANG_INC = [a for d in glob.glob("/work/scalehls/build/lib/clang/*/include") for a in ("-I", d)]
+# identity + fixpoint only compare our parser to our printer, so also ask scalehls-opt
 MLIR_OPT = os.environ.get("MLIR_OPT", "/work/scalehls/build/bin/scalehls-opt")
 ROOT = sys.argv[1]
 OUT = os.environ.get("BAKEOFF_OUT") or tempfile.mkdtemp(prefix="bakeoff_")
@@ -78,8 +63,7 @@ def mlir_rejects(text):
 
 
 def declared_top(d):
-    """(top function, source file) from HLSFactory's hls_template.tcl, so we
-    test the real kernel rather than whichever helper compiles first."""
+    """(top function, source file) from hls_template.tcl."""
     tcl = os.path.join(d, "hls_template.tcl")
     if not os.path.exists(tcl):
         return None, None

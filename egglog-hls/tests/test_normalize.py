@@ -1,5 +1,4 @@
-"""reg2mem turns the iter_args form into the store form, and the result still
-round-trips cleanly through the e-graph."""
+"""reg2mem tests."""
 
 from __future__ import annotations
 
@@ -33,7 +32,6 @@ def test_reg2mem_removes_iter_args() -> None:
     normalized = reg2mem(module)
     assert all(len(f.regions[0].args) == 1 for f in _for_loops(normalized)), \
         "reg2mem left a loop-carried accumulator behind"
-    # No scf.yield with operands should remain (accumulator became a store).
     ops = _for_loops(normalized)
     for loop in ops:
         assert not loop.results, "loop still produces a value after reg2mem"
@@ -49,7 +47,6 @@ def test_reg2mem_output_still_roundtrips() -> None:
 
 
 def test_reg2mem_is_noop_on_store_form() -> None:
-    """The already-regular matmul must be left structurally unchanged."""
     from egglog_hls.ir import structurally_equal
 
     module = parse_module((EXAMPLES / "matmul_regular.mlir").read_text())

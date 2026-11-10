@@ -1,14 +1,7 @@
-"""In-memory MLIR IR model for the round-trip pipeline.
+"""In-memory MLIR IR.
 
-The model is intentionally small and dialect-light: an ``Op`` carries the
-handful of things needed to reprint MLIR exactly (name, SSA results/operands,
-result types, attributes, and nested regions). Op-specific bits that are *not*
-SSA values (a memref type on a load, the loop kind, etc.) live in ``meta``.
-
-Invariant that the rest of the pipeline relies on: the only places an SSA
-*value name* ever appears are ``Op.results``, ``Op.operands`` and
-``Region.args``. ``meta`` never holds a value name. That is what lets
-:func:`canonicalize` renumber values uniformly without op-specific knowledge.
+SSA value names only appear in Op.results, Op.operands and Region.args (never in meta),
+so canonicalize can renumber them without op-specific knowledge.
 """
 
 from __future__ import annotations
@@ -20,8 +13,7 @@ from itertools import count
 
 @dataclass
 class Region:
-    """A single-block region. ``args``/``arg_types`` are the block arguments
-    (for scf.for that is the induction variable followed by the iter_args)."""
+    """Single-block region; args are block args (scf.for: induction var, then iter_args)."""
 
     args: list[str] = field(default_factory=list)
     arg_types: list[str] = field(default_factory=list)
@@ -46,39 +38,30 @@ class Func:
     arg_types: list[str] = field(default_factory=list)
     result_types: list[str] = field(default_factory=list)
     body: Region = field(default_factory=Region)
-    # Trailing "attributes {...}" (e.g. llvm.linkage from a real frontend),
-    # preserved verbatim. Holds no SSA values, so it survives canonicalization.
+    # trailing "attributes {...}", kept verbatim
     attributes_raw: str = ""
 
 
 @dataclass
 class Verbatim:
-    """A module-scope op we keep as raw text (``llvm.mlir.global``,
-    ``llvm.func`` declarations). Holds no SSA values, so it needs no
-    renumbering and round-trips untouched."""
+    """Module-scope op kept as raw text (llvm.mlir.global, llvm.func)."""
 
     text: str
 
 
 @dataclass
 class Module:
-    # Top-level items in source order: functions and verbatim module-scope ops.
+    # functions and verbatim ops, in source order
     funcs: list[Func | Verbatim] = field(default_factory=list)
-    # Text between "module" and its "{" (e.g. cgeist's dlti/llvm attributes).
+    # text between "module" and "{"
     attributes_raw: str = ""
 
 
-# --------------------------------------------------------------------------
-# Canonicalization
-# --------------------------------------------------------------------------
-# MLIR's own AsmPrinter renumbers SSA values on every print (%0, %1, ...), so
-# "the program came back unchanged" means *structurally identical after
-# value-numbering*, not byte-identical text. We define that canonical form here
-# and compare canonical modules with plain dataclass equality.
+# MLIR renumbers SSA values on every print, so "unchanged" means equal after
+# value-numbering, not byte-identical.
 
 
 def _rename_region(region: Region, mapping: dict[str, str], counter) -> None:
-    # Block args are definitions: assign fresh names first, in order.
     region.args = [_define(a, mapping, counter) for a in region.args]
     for op in region.ops:
         op.operands = [mapping.get(o, o) for o in op.operands]
@@ -94,8 +77,7 @@ def _define(old: str, mapping: dict[str, str], counter) -> str:
 
 
 def canonicalize(module: Module) -> Module:
-    """Return a deep copy of ``module`` with every SSA value renamed to a
-    positional, definition-order name (``"0"``, ``"1"`` ...), per function."""
+    """Deep copy with SSA values renamed "0", "1", ... in definition order, per function."""
     out = copy.deepcopy(module)
     for func in out.funcs:
         if isinstance(func, Verbatim):
@@ -108,17 +90,16 @@ def canonicalize(module: Module) -> Module:
 
 
 def structurally_equal(a: Module, b: Module) -> bool:
-    """True when two modules are identical up to SSA value-numbering."""
+    """Equal up to SSA value-numbering."""
     return canonicalize(a) == canonicalize(b)
 
 
 def diff_summary(a: Module, b: Module) -> str:
-    """Human-readable first divergence between two canonical modules, for
-    verification failure messages."""
+    """First line where the two canonical modules differ."""
     ca, cb = canonicalize(a), canonicalize(b)
     if ca == cb:
         return "(identical)"
-    from .printer import print_module  # local import to avoid a cycle
+    from .printer import print_module  # avoid import cycle
 
     la = print_module(ca).splitlines()
     lb = print_module(cb).splitlines()

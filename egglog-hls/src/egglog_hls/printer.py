@@ -1,10 +1,4 @@
-"""Print the IR model back to MLIR text.
-
-Output is deterministic and re-parseable: running ``parse_module(print_module(m))``
-yields a module structurally equal to ``m`` (see :func:`ir.structurally_equal`).
-For a stable, diffable rendering, canonicalize before printing so SSA names are
-positional.
-"""
+"""Print the IR back to MLIR text (deterministic; canonicalize first for stable SSA names)."""
 
 from __future__ import annotations
 
@@ -18,8 +12,7 @@ def _v(name: str) -> str:
 
 
 def _lhs(results: list[str]) -> str:
-    """Result list. Results parsed from "%x:N" are named x#0..x#N-1; re-pack
-    them so the text is legal MLIR (uses stay "%x#i")."""
+    """Re-pack x#0..x#N-1 results as "%x:N"."""
     if results and "#" in results[0]:
         base = results[0].split("#", 1)[0]
         if results == [f"{base}#{i}" for i in range(len(results))]:
@@ -80,12 +73,12 @@ def _for_header(op: Op) -> str:
 
 def _print_body(op: Op) -> str:
     name = op.name
-    if "parts" in op.meta:  # opaque fallback: interleave text and value holes
+    if "parts" in op.meta:  # opaque op: interleave text and values
         parts = op.meta["parts"]
         return parts[0] + "".join(_v(o) + p for o, p in zip(op.operands, parts[1:]))
     if name == "arith.constant":
         val = op.attributes["value"]
-        if val in ("true", "false"):  # boolean constants print without a type
+        if val in ("true", "false"):  # bool constants have no type
             return f"arith.constant {val}"
         return f"arith.constant {val} : {op.result_types[0]}"
     if name in ("arith.cmpi", "arith.cmpf"):
