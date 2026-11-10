@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from egglog import String, eq, i64, ne, panic, rewrite, rule, var
 
-from .egraph_dataflow import Val, iconst, p2
+from .egraph_dataflow import Val, const, iconst, p1, p2
 
 INT_TYPES = {"i8": 8, "i16": 16, "i32": 32, "i64": 64, "index": 64}
 
@@ -62,4 +62,41 @@ def int_rules(types=INT_TYPES):
         a, b = var("a", i64), var("b", i64)
         out.append(rule(eq(iconst(a, ty)).to(iconst(b, ty)), ne(a).to(b)).then(
             panic(f"unsound rewrite: two {ty} constants merged")))
+    return out
+
+
+FLOAT_TYPES = ("f16", "f32", "f64")
+
+
+def float_rules(types=FLOAT_TYPES, fast_math: bool = False):
+    """IEEE-exact rules; ``fast_math`` adds reassociating ones (results may differ in ulps)."""
+    x, y, z = var("x", Val), var("y", Val), var("z", Val)
+    e, e2 = var("e", String), var("e2", String)
+    out = []
+    for ty in types:
+        def P(name, a, b, extra=e):
+            return p2(f"arith.{name}", extra, a, b, ty)
+
+        def C(v):
+            return const(f"{v:e}", ty)
+
+        out += [
+            rewrite(P("addf", x, y)).to(P("addf", y, x)),
+            rewrite(P("mulf", x, y)).to(P("mulf", y, x)),
+            rewrite(P("mulf", x, C(1.0))).to(x),
+            rewrite(P("divf", x, C(1.0))).to(x),
+            rewrite(P("subf", x, C(0.0))).to(x),
+            rewrite(P("addf", x, C(-0.0))).to(x),
+            rewrite(P("mulf", x, C(2.0))).to(P("addf", x, x)),
+            rewrite(P("mulf", x, C(-1.0))).to(p1("arith.negf", "", x, ty)),
+            rewrite(p1("arith.negf", e, p1("arith.negf", e2, x, ty), ty)).to(x),
+        ]
+        if fast_math:
+            out += [
+                rewrite(P("addf", x, C(0.0))).to(x),
+                rewrite(P("addf", P("mulf", x, y), P("mulf", x, z, e2))).to(
+                    P("mulf", x, P("addf", y, z))),
+                rewrite(P("subf", P("mulf", x, y), P("mulf", x, z, e2))).to(
+                    P("mulf", x, P("subf", y, z))),
+            ]
     return out
