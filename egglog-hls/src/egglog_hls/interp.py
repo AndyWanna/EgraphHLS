@@ -104,6 +104,26 @@ class Memref:
         self.cells[idx] = v
 
 
+class View:
+    """``polygeist.subindex``: same rank offsets dim 0, lower rank fixes dim 0."""
+
+    def __init__(self, base, i: int, drop: bool) -> None:
+        self.base, self.i, self.drop = base, i, drop
+
+    def _at(self, idx: tuple) -> tuple:
+        return (self.i, *idx) if self.drop else (idx[0] + self.i, *idx[1:])
+
+    def load(self, idx: tuple):
+        return self.base.load(self._at(idx))
+
+    def store(self, idx: tuple, v) -> None:
+        self.base.store(self._at(idx), v)
+
+
+def _rank(memref_ty: str) -> int:
+    return len(re.findall(r"(?:\?|\d+)x", memref_ty))
+
+
 def _elem(memref_ty: str) -> str:
     return memref_ty[memref_ty.index("<") + 1 : memref_ty.rindex(">")].split("x")[-1]
 
@@ -203,6 +223,9 @@ class _Interp:
             return [0]
         parts = op.meta["parts"]
         text = parts[0] + "".join(f"@{i}" + p for i, p in enumerate(parts[1:]))
+        if op.name.strip("\"") == "polygeist.subindex":
+            src, dst = re.search(r":\s*\((memref<[^>]*>).*->\s*(memref<[^>]*>)", text).groups()
+            return [View(ins[0], ins[1], _rank(dst) < _rank(src))]
         call = re.match(r"(?:func\.)?call\s+@([\w$.]+)\(", text)
         if call and call.group(1) in self.funcs:
             f = self.funcs[call.group(1)]
@@ -226,7 +249,7 @@ class _Interp:
         return []
 
 
-def run(func: Func, seed: int = 0, budget: int = 10_000_000, funcs: dict | None = None):
+def run(func: Func, seed: int = 0, budget: int = 50_000_000, funcs: dict | None = None):
     """Run ``func`` on seeded random inputs. Returns (results, memory state)."""
     rnd = random.Random(seed)
     args = []
@@ -245,12 +268,16 @@ def run(func: Func, seed: int = 0, budget: int = 10_000_000, funcs: dict | None 
     return out, mem
 
 
-def equivalent(a: Module, b: Module, seeds=range(2)) -> bool:
+def equivalent(a: Module, b: Module, seeds=range(2), rel_tol: float = 0.0) -> bool:
     fa = {f.name: f for f in a.funcs if isinstance(f, Func)}
     fb = {f.name: f for f in b.funcs if isinstance(f, Func)}
     return fa.keys() == fb.keys() and all(
-        _same(run(fa[n], s, funcs=fa), run(fb[n], s, funcs=fb)) for n in fa for s in seeds)
+        _same(run(fa[n], s, funcs=fa), run(fb[n], s, funcs=fb), rel_tol) for n in fa for s in seeds)
 
 
-def _same(x, y) -> bool:
+def _same(x, y, rel_tol: float) -> bool:
+    if rel_tol and isinstance(x, float) and isinstance(y, float):
+        return math.isclose(x, y, rel_tol=rel_tol, abs_tol=rel_tol) or repr(x) == repr(y)
+    if isinstance(x, (list, tuple)) and isinstance(y, (list, tuple)):
+        return len(x) == len(y) and all(_same(p, q, rel_tol) for p, q in zip(x, y))
     return repr(x) == repr(y)

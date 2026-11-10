@@ -1,6 +1,6 @@
 # egglog-hls
 
-MLIR <-> [egglog](https://github.com/egraphs-good/egglog-python) e-graph, plus a first set of integer rewrites extracted with an HLS cost model.
+MLIR <-> [egglog](https://github.com/egraphs-good/egglog-python) e-graph, plus integer and float rewrites extracted with an HLS cost model.
 
 ```
 MLIR text --parse--> IR --to_egraph--> e-graph --from_egraph--> IR --print--> MLIR text
@@ -17,7 +17,7 @@ pip install -e ".[dev]"
 # round-trip and check (identity + fixpoint), exit code != 0 on mismatch
 python -m egglog_hls roundtrip examples/matmul_yield.mlir
 
-# integer rewrites, extracted by HLS cost; --check runs the reference interpreter
+# rewrites extracted by HLS cost; --check runs the reference interpreter, --fast-math allows float reassociation
 python -m egglog_hls optimize --check examples/cgeist_matmul.mlir
 
 # iter_args form -> store form

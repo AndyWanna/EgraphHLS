@@ -44,10 +44,11 @@ def _cmd_optimize(args: argparse.Namespace) -> int:
     from .cost import hls_cost
     from .egraph_dataflow import optimize
     from .interp import Unsupported, equivalent
-    from .rules import int_rules
+    from .rules import float_rules, int_rules
 
     module = parse_module(_read(args.path))
-    out, before, after = optimize(module, int_rules(), hls_cost, args.iters)
+    rules = int_rules() + float_rules(fast_math=args.fast_math)
+    out, before, after = optimize(module, rules, hls_cost, args.iters)
     text = print_module(canonicalize(out))
     if args.emit:
         _write(args.emit, text)
@@ -56,7 +57,7 @@ def _cmd_optimize(args: argparse.Namespace) -> int:
     sys.stderr.write(f"cost {before} -> {after} ({100 * (before - after) / max(before, 1):.1f}%)\n")
     if args.check:
         try:
-            same = equivalent(module, out)
+            same = equivalent(module, out, rel_tol=1e-9 if args.fast_math else 0.0)
         except Unsupported as e:
             sys.stderr.write(f"check skipped: {e}\n")
             return 0
@@ -90,10 +91,12 @@ def main(argv: list[str] | None = None) -> int:
     rm.add_argument("--emit", help="write output MLIR to this file")
     rm.set_defaults(func=_cmd_reg2mem)
 
-    op = sub.add_parser("optimize", help="apply integer rewrites, extract by HLS cost")
+    op = sub.add_parser("optimize", help="apply rewrites, extract by HLS cost")
     op.add_argument("path")
     op.add_argument("--emit", help="write output MLIR to this file")
     op.add_argument("--iters", type=int, default=6)
+    op.add_argument("--fast-math", action="store_true",
+                    help="allow float reassociation (results may differ in ulps)")
     op.add_argument("--check", action="store_true",
                     help="compare against the input with the reference interpreter")
     op.set_defaults(func=_cmd_optimize)

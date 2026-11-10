@@ -250,10 +250,12 @@ def optimize(m: Module, rules, cost_model, iters: int = 6) -> tuple[Module, int,
     egraph = EGraph()
     term = encode(m)
     egraph.register(term)
-    _, before = egraph.extract(term, include_cost=True, cost_model=cost_model)
+    _, before = egraph.extract(term, include_cost=True, cost_model=cost_model,
+                               extractor="greedy-dag")
     egraph.register(*rules)
     egraph.run(iters)
-    best, after = egraph.extract(term, include_cost=True, cost_model=cost_model)
+    best, after = egraph.extract(term, include_cost=True, cost_model=cost_model,
+                                 extractor="greedy-dag")
     return decode(best), before, after
 
 
@@ -264,5 +266,5 @@ def roundtrip(m: Module, rules=(), iters: int = 10, cost_model=None) -> Module:
     if rules:
         egraph.register(*rules)
         egraph.run(iters)
-    return decode(egraph.extract(term, cost_model=cost_model)
+    return decode(egraph.extract(term, cost_model=cost_model, extractor="greedy-dag")
                   if cost_model else egraph.extract(term))

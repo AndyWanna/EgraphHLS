@@ -18,19 +18,21 @@ The MachSuite failures are in cgeist (LLVM Nov-2022 pin), before egglog-hls sees
 
 pp4fpgas and rosetta are C++ with HLS types (`ap_int`, `hls::stream`) and not attempted.
 
-## Integer rewrites
+## Rewrites
 
-`bench/optsweep.py`: dataflow encoding + `rules.py`, extracted with `cost.py` (rough LUT-equivalents, a DSP counts as 100; not calibrated against Vitis yet). check = original and optimized give identical results under `interp.py` on random inputs.
+`bench/optsweep.py`: dataflow encoding + `rules.py` (integer rules and IEEE-exact float rules), extracted with `cost.py` (rough LUT-equivalents, a DSP counts as 100; not calibrated against Vitis yet). Costs are DAG costs (`greedy-dag` extraction, shared values counted once). check = original and optimized give identical results under `interp.py` on random inputs.
 
 | kernel | cost before | after | delta | check |
 |--------|------------:|------:|------:|-------|
-| stencil3D | 16672 | 8032 | -51.8% | same |
-| sort_radix | 6867 | 3747 | -45.4% | same |
-| gemm_blocked | 3508 | 2548 | -27.4% | same |
+| stencil3D | 7824 | 4224 | -46.0% | same |
+| sort_radix | 3665 | 1985 | -45.8% | same |
 | stencil2D | 1792 | 1312 | -26.8% | same |
-| gemm_ncubed | 2916 | 2196 | -24.7% | same |
-| fft_transpose | 745288 | 702568 | -5.7% | same |
-| backprop | 95277 | 91197 | -4.3% | skipped (polygeist.subindex) |
-| md_knn | 236172 | 235932 | -0.1% | same |
+| fft_transpose | 181960 | 144880 | -20.4% | same |
+| gemm_ncubed | 2516 | 2036 | -19.1% | same |
+| gemm_blocked | 2644 | 2164 | -18.2% | same |
+| backprop | 89693 | 86433 | -3.6% | same |
+| md_knn | 19900 | 19660 | -1.2% | same |
 
-bfs_bulk, bfs_queue, nw, spmv_crs, spmv_ellpack and all of polybench: no change (polybench is float arithmetic, the rules are integer only), all check same.
+bfs_bulk, bfs_queue, nw, spmv_crs, spmv_ellpack and all of polybench: no change, all check same.
+
+`--fast-math` adds float factoring (`a*b + a*c -> a*(b+c)`) and changes nothing here: polybench bodies have at most one product per sum, and the fft butterflies reuse both products (`x*c + y*c`, `x*c - y*c`), so factoring saves no multiplier.
